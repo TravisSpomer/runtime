@@ -33,7 +33,174 @@ namespace System.Buffers.Text
         /// - InvalidData - if the input contains bytes outside of the expected base64 range, or if it contains invalid/more than two padding characters,
         ///   or if the input is incomplete (i.e. not a multiple of 4) and <paramref name="isFinalBlock"/> is <see langword="true"/>.
         /// </returns>
-        public static unsafe OperationStatus DecodeFromUtf8(ReadOnlySpan<byte> utf8, Span<byte> bytes, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus DecodeFromUtf8(ReadOnlySpan<byte> utf8, Span<byte> bytes, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true) =>
+            Base64Internal.DecodeFromUtf8(DecodingMap, DecodingMapAvx2, DecodingMapSsse3, utf8, bytes, out bytesConsumed, out bytesWritten, isFinalBlock);
+
+        /// <summary>
+        /// Decode the span of UTF-8 encoded text in base 64 (in-place) into binary data.
+        /// The decoded binary output is smaller than the text data contained in the input (the operation deflates the data).
+        /// If the input is not a multiple of 4, it will not decode any.
+        /// </summary>
+        /// <param name="buffer">The input span which contains the base 64 text data that needs to be decoded.</param>
+        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire input span
+        /// - InvalidData - if the input contains bytes outside of the expected base 64 range, or if it contains invalid/more than two padding characters,
+        ///   or if the input is incomplete (i.e. not a multiple of 4).
+        /// It does not return DestinationTooSmall since that is not possible for base 64 decoding.
+        /// It does not return NeedMoreData since this method tramples the data in the buffer and
+        /// hence can only be called once with all the data in the buffer.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus DecodeFromUtf8InPlace(Span<byte> buffer, out int bytesWritten) =>
+            Base64Internal.DecodeFromUtf8InPlace(DecodingMap, buffer, out bytesWritten);
+
+        /// <summary>
+        /// Returns the maximum length (in bytes) of the result if you were to deocde base 64 encoded text within a byte span of size "length".
+        /// </summary>
+        /// <exception cref="System.ArgumentOutOfRangeException">
+        /// Thrown when the specified <paramref name="length"/> is less than 0.
+        /// </exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetMaxDecodedFromUtf8Length(int length) =>
+            Base64Internal.GetMaxDecodedFromUtf8Length(length);
+
+        // Pre-computing this table using a custom string(s_characters) and GenerateDecodingMapAndVerify (found in tests)
+        private static ReadOnlySpan<sbyte> DecodingMap => new sbyte[] {
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,         //62 is placed at index 43 (for +), 63 at index 47 (for /)
+            52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,         //52-61 are placed at index 48-57 (for 0-9), 64 at index 61 (for =)
+            -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+            15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,         //0-25 are placed at index 65-90 (for A-Z)
+            -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+            41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,         //26-51 are placed at index 97-122 (for a-z)
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Bytes over 122 ('z') are invalid and cannot be decoded
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Hence, padding the map with 255, which indicates invalid input
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        };
+
+        private static readonly Vector256<sbyte> DecodingMapAvx2 = Vector256.Create(
+             0, 16, 19, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, 16, 19, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0);
+
+        private static readonly Vector128<sbyte> DecodingMapSsse3 = Vector128.Create(
+            0, 16, 19, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0);
+    }
+
+    public static partial class Base64Url
+    {
+        /// <summary>
+        /// Decode the span of UTF-8 encoded text represented as base64url into binary data.
+        /// If the input is not a multiple of 4, it will decode as much as it can, to the closest multiple of 4.
+        /// </summary>
+        /// <param name="utf8">The input span which contains UTF-8 encoded text in base64url that needs to be decoded.</param>
+        /// <param name="bytes">The output span which contains the result of the operation, i.e. the decoded binary data.</param>
+        /// <param name="bytesConsumed">The number of input bytes consumed during the operation. This can be used to slice the input for subsequent calls, if necessary.</param>
+        /// <param name="bytesWritten">The number of bytes written into the output span. This can be used to slice the output for subsequent calls, if necessary.</param>
+        /// <param name="isFinalBlock"><see langword="true"/> (default) when the input span contains the entire data to encode.
+        /// Set to <see langword="true"/> when the source buffer contains the entirety of the data to encode.
+        /// Set to <see langword="false"/> if this method is being called in a loop and if more input data may follow.
+        /// At the end of the loop, call this (potentially with an empty source buffer) passing <see langword="true"/>.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire input span
+        /// - DestinationTooSmall - if there is not enough space in the output span to fit the decoded input
+        /// - NeedMoreData - only if <paramref name="isFinalBlock"/> is false and the input is not a multiple of 4, otherwise the partial input would be considered as InvalidData
+        /// - InvalidData - if the input contains bytes outside of the expected base64url range, or if it contains invalid/more than two padding characters,
+        ///   or if the input is incomplete (i.e. not a multiple of 4) and <paramref name="isFinalBlock"/> is <see langword="true"/>.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus DecodeFromUtf8(ReadOnlySpan<byte> utf8, Span<byte> bytes, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true) =>
+            Base64Internal.DecodeFromUtf8(DecodingMap, DecodingMapAvx2, DecodingMapSsse3, utf8, bytes, out bytesConsumed, out bytesWritten, isFinalBlock);
+
+        /// <summary>
+        /// Decode the span of UTF-8 encoded text in base64url (in-place) into binary data.
+        /// The decoded binary output is smaller than the text data contained in the input (the operation deflates the data).
+        /// If the input is not a multiple of 4, it will not decode any.
+        /// </summary>
+        /// <param name="buffer">The input span which contains the base64url text data that needs to be decoded.</param>
+        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire input span
+        /// - InvalidData - if the input contains bytes outside of the expected base64url range, or if it contains invalid/more than two padding characters,
+        ///   or if the input is incomplete (i.e. not a multiple of 4).
+        /// It does not return DestinationTooSmall since that is not possible for base64url decoding.
+        /// It does not return NeedMoreData since this method tramples the data in the buffer and
+        /// hence can only be called once with all the data in the buffer.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus DecodeFromUtf8InPlace(Span<byte> buffer, out int bytesWritten) =>
+            Base64Internal.DecodeFromUtf8InPlace(DecodingMap, buffer, out bytesWritten);
+
+        /// <summary>
+        /// Returns the maximum length (in bytes) of the result if you were to deocde base64url encoded text within a byte span of size "length".
+        /// </summary>
+        /// <exception cref="System.ArgumentOutOfRangeException">
+        /// Thrown when the specified <paramref name="length"/> is less than 0.
+        /// </exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetMaxDecodedFromUtf8Length(int length) =>
+            Base64Internal.GetMaxDecodedFromUtf8Length(length);
+
+        private static ReadOnlySpan<sbyte> DecodingMap => new sbyte[] {
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,         //62 is placed at index 45 (for -), 63 at index 95 (for _)
+            52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,         //52-61 are placed at index 48-57 (for 0-9), 64 at index 61 (for =)
+            -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+            15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63,         //0-25 are placed at index 65-90 (for A-Z)
+            -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+            41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,         //26-51 are placed at index 97-122 (for a-z)
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Bytes over 122 ('z') are invalid and cannot be decoded
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Hence, padding the map with 255, which indicates invalid input
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        };
+
+        private static readonly Vector256<sbyte> DecodingMapAvx2 = Vector256.Create(
+             0, -32, 17, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+            0, -32, 17, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0);
+
+        private static readonly Vector128<sbyte> DecodingMapSsse3 = Vector128.Create(
+            0, -32, 17, 4,
+            -65, -65, -71, -71,
+            0, 0, 0, 0,
+            0, 0, 0, 0);
+    }
+
+
+
+    // AVX2 version based on https://github.com/aklomp/base64/tree/e516d769a2a432c08404f1981e73b431566057be/lib/arch/avx2
+    // SSSE3 version based on https://github.com/aklomp/base64/tree/e516d769a2a432c08404f1981e73b431566057be/lib/arch/ssse3
+
+    internal static partial class Base64Internal
+    {
+        internal static unsafe OperationStatus DecodeFromUtf8(ReadOnlySpan<sbyte> decodingMapSpan, Vector256<sbyte> decodingMapAvx2, Vector128<sbyte> decodingMapSsse3, ReadOnlySpan<byte> utf8, Span<byte> bytes, out int bytesConsumed, out int bytesWritten, bool isFinalBlock)
         {
             if (utf8.IsEmpty)
             {
@@ -67,7 +234,7 @@ namespace System.Buffers.Text
                     byte* end = srcMax - 45;
                     if (Avx2.IsSupported && (end >= src))
                     {
-                        Avx2Decode(ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
+                        Avx2Decode(decodingMapAvx2, ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
 
                         if (src == srcEnd)
                             goto DoneExit;
@@ -76,7 +243,7 @@ namespace System.Buffers.Text
                     end = srcMax - 24;
                     if (Ssse3.IsSupported && (end >= src))
                     {
-                        Ssse3Decode(ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
+                        Ssse3Decode(decodingMapSsse3, ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
 
                         if (src == srcEnd)
                             goto DoneExit;
@@ -99,7 +266,7 @@ namespace System.Buffers.Text
                     maxSrcLength = (destLength / 3) * 4;
                 }
 
-                ref sbyte decodingMap = ref MemoryMarshal.GetReference(DecodingMap);
+                ref sbyte decodingMap = ref MemoryMarshal.GetReference(decodingMapSpan);
                 srcMax = srcBytes + (uint)maxSrcLength;
 
                 while (src < srcMax)
@@ -224,14 +391,8 @@ namespace System.Buffers.Text
             }
         }
 
-        /// <summary>
-        /// Returns the maximum length (in bytes) of the result if you were to deocde base 64 encoded text within a byte span of size "length".
-        /// </summary>
-        /// <exception cref="System.ArgumentOutOfRangeException">
-        /// Thrown when the specified <paramref name="length"/> is less than 0.
-        /// </exception>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int GetMaxDecodedFromUtf8Length(int length)
+        internal static int GetMaxDecodedFromUtf8Length(int length)
         {
             if (length < 0)
                 ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length);
@@ -239,22 +400,7 @@ namespace System.Buffers.Text
             return (length >> 2) * 3;
         }
 
-        /// <summary>
-        /// Decode the span of UTF-8 encoded text in base 64 (in-place) into binary data.
-        /// The decoded binary output is smaller than the text data contained in the input (the operation deflates the data).
-        /// If the input is not a multiple of 4, it will not decode any.
-        /// </summary>
-        /// <param name="buffer">The input span which contains the base 64 text data that needs to be decoded.</param>
-        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
-        /// <returns>It returns the OperationStatus enum values:
-        /// - Done - on successful processing of the entire input span
-        /// - InvalidData - if the input contains bytes outside of the expected base 64 range, or if it contains invalid/more than two padding characters,
-        ///   or if the input is incomplete (i.e. not a multiple of 4).
-        /// It does not return DestinationTooSmall since that is not possible for base 64 decoding.
-        /// It does not return NeedMoreData since this method tramples the data in the buffer and
-        /// hence can only be called once with all the data in the buffer.
-        /// </returns>
-        public static unsafe OperationStatus DecodeFromUtf8InPlace(Span<byte> buffer, out int bytesWritten)
+        internal static unsafe OperationStatus DecodeFromUtf8InPlace(ReadOnlySpan<sbyte> decodingMapSpan, Span<byte> buffer, out int bytesWritten)
         {
             if (buffer.IsEmpty)
             {
@@ -274,7 +420,7 @@ namespace System.Buffers.Text
                 if (bufferLength == 0)
                     goto DoneExit;
 
-                ref sbyte decodingMap = ref MemoryMarshal.GetReference(DecodingMap);
+                ref sbyte decodingMap = ref MemoryMarshal.GetReference(decodingMapSpan);
 
                 while (sourceIndex < bufferLength - 4)
                 {
@@ -350,7 +496,7 @@ namespace System.Buffers.Text
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe void Avx2Decode(ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
+        private static unsafe void Avx2Decode(Vector256<sbyte> lutShift, ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
         {
             // If we have AVX2 support, pick off 32 bytes at a time for as long as we can,
             // but make sure that we quit before seeing any == markers at the end of the
@@ -380,16 +526,6 @@ namespace System.Buffers.Text
                 0x11, 0x11, 0x11, 0x11,
                 0x11, 0x11, 0x13, 0x1A,
                 0x1B, 0x1B, 0x1B, 0x1A);
-
-            Vector256<sbyte> lutShift = Vector256.Create(
-                 0, 16, 19, 4,
-                -65, -65, -71, -71,
-                0, 0, 0, 0,
-                0, 0, 0, 0,
-                0, 16, 19, 4,
-                -65, -65, -71, -71,
-                0, 0, 0, 0,
-                0, 0, 0, 0);
 
             Vector256<sbyte> packBytesInLaneMask = Vector256.Create(
                 2, 1, 0, 6,
@@ -477,7 +613,7 @@ namespace System.Buffers.Text
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe void Ssse3Decode(ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
+        private static unsafe void Ssse3Decode(Vector128<sbyte> lutShift, ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
         {
             // If we have SSSE3 support, pick off 16 bytes at a time for as long as we can,
             // but make sure that we quit before seeing any == markers at the end of the
@@ -563,12 +699,6 @@ namespace System.Buffers.Text
                 0x11, 0x11, 0x11, 0x11,
                 0x11, 0x11, 0x13, 0x1A,
                 0x1B, 0x1B, 0x1B, 0x1A);
-
-            Vector128<sbyte> lutShift = Vector128.Create(
-                0, 16, 19, 4,
-                -65, -65, -71, -71,
-                0, 0, 0, 0,
-                0, 0, 0, 0);
 
             Vector128<sbyte> packBytesMask = Vector128.Create(
                 2, 1, 0, 6,
@@ -675,25 +805,5 @@ namespace System.Buffers.Text
             destination[1] = (byte)(value >> 8);
             destination[2] = (byte)(value);
         }
-
-        // Pre-computing this table using a custom string(s_characters) and GenerateDecodingMapAndVerify (found in tests)
-        private static ReadOnlySpan<sbyte> DecodingMap => new sbyte[] {
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63,         //62 is placed at index 43 (for +), 63 at index 47 (for /)
-            52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1,         //52-61 are placed at index 48-57 (for 0-9), 64 at index 61 (for =)
-            -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-            15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, -1,         //0-25 are placed at index 65-90 (for A-Z)
-            -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-            41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,         //26-51 are placed at index 97-122 (for a-z)
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Bytes over 122 ('z') are invalid and cannot be decoded
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,         // Hence, padding the map with 255, which indicates invalid input
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        };
     }
 }

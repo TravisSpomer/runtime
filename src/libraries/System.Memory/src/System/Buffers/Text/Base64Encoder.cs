@@ -33,7 +33,160 @@ namespace System.Buffers.Text
         /// - NeedMoreData - only if <paramref name="isFinalBlock"/> is <see langword="false"/>, otherwise the output is padded if the input is not a multiple of 3
         /// It does not return InvalidData since that is not possible for base64 encoding.
         /// </returns>
-        public static unsafe OperationStatus EncodeToUtf8(ReadOnlySpan<byte> bytes, Span<byte> utf8, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus EncodeToUtf8(ReadOnlySpan<byte> bytes, Span<byte> utf8, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true) =>
+            Base64Internal.EncodeToUtf8(EncodingMap, EncodingMapAvx2, EncodingMapSsse3, bytes, utf8, out bytesConsumed, out bytesWritten, isFinalBlock);
+
+        /// <summary>
+        /// Encode the span of binary data (in-place) into UTF-8 encoded text represented as base 64.
+        /// The encoded text output is larger than the binary data contained in the input (the operation inflates the data).
+        /// </summary>
+        /// <param name="buffer">The input span which contains binary data that needs to be encoded.
+        /// It needs to be large enough to fit the result of the operation.</param>
+        /// <param name="dataLength">The amount of binary data contained within the buffer that needs to be encoded
+        /// (and needs to be smaller than the buffer length).</param>
+        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire buffer
+        /// - DestinationTooSmall - if there is not enough space in the buffer beyond dataLength to fit the result of encoding the input
+        /// It does not return NeedMoreData since this method tramples the data in the buffer and hence can only be called once with all the data in the buffer.
+        /// It does not return InvalidData since that is not possible for base 64 encoding.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus EncodeToUtf8InPlace(Span<byte> buffer, int dataLength, out int bytesWritten) =>
+            Base64Internal.EncodeToUtf8InPlace(EncodingMap, buffer, dataLength, out bytesWritten);
+
+        /// <summary>
+        /// Returns the maximum length (in bytes) of the result if you were to encode binary data within a byte span of size "length".
+        /// </summary>
+        /// <exception cref="System.ArgumentOutOfRangeException">
+        /// Thrown when the specified <paramref name="length"/> is less than 0 or larger than 1610612733 (since encode inflates the data by 4/3).
+        /// </exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetMaxEncodedToUtf8Length(int length) =>
+            Base64Internal.GetMaxEncodedToUtf8Length(length);
+
+        // Pre-computing this table using a custom string(s_characters) and GenerateEncodingMapAndVerify (found in tests)
+        private static ReadOnlySpan<byte> EncodingMap => new byte[] {
+            65, 66, 67, 68, 69, 70, 71, 72,         //A..H
+            73, 74, 75, 76, 77, 78, 79, 80,         //I..P
+            81, 82, 83, 84, 85, 86, 87, 88,         //Q..X
+            89, 90, 97, 98, 99, 100, 101, 102,      //Y..Z, a..f
+            103, 104, 105, 106, 107, 108, 109, 110, //g..n
+            111, 112, 113, 114, 115, 116, 117, 118, //o..v
+            119, 120, 121, 122, 48, 49, 50, 51,     //w..z, 0..3
+            52, 53, 54, 55, 56, 57, 43, 47          //4..9, +, /
+        };
+
+        private static readonly Vector256<sbyte> EncodingMapAvx2 = Vector256.Create(
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -19, -16, 0, 0,
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -19, -16, 0, 0);
+
+        private static readonly Vector128<sbyte> EncodingMapSsse3 = Vector128.Create(
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -19, -16, 0, 0);
+    }
+
+    /// <summary>
+    /// Convert between binary data and UTF-8 encoded text that is represented in base 64 encoding with an URL and filename safe alphabet, or base64url.
+    /// </summary>
+    /// <remarks>
+    /// Base64url encoding is identical to base 64 encoding except with the "+" character replaced with "-", and the "/" character replaced with "_".
+    /// </remarks>
+    public static partial class Base64Url
+    {
+        /// <summary>
+        /// Encode the span of binary data into UTF-8 encoded text represented as base64url.
+        /// </summary>
+        /// <param name="bytes">The input span which contains binary data that needs to be encoded.</param>
+        /// <param name="utf8">The output span which contains the result of the operation, i.e. the UTF-8 encoded text in base64url.</param>
+        /// <param name="bytesConsumed">The number of input bytes consumed during the operation. This can be used to slice the input for subsequent calls, if necessary.</param>
+        /// <param name="bytesWritten">The number of bytes written into the output span. This can be used to slice the output for subsequent calls, if necessary.</param>
+        /// <param name="isFinalBlock"><see langword="true"/> (default) when the input span contains the entire data to encode.
+        /// Set to <see langword="true"/> when the source buffer contains the entirety of the data to encode.
+        /// Set to <see langword="false"/> if this method is being called in a loop and if more input data may follow.
+        /// At the end of the loop, call this (potentially with an empty source buffer) passing <see langword="true"/>.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire input span
+        /// - DestinationTooSmall - if there is not enough space in the output span to fit the encoded input
+        /// - NeedMoreData - only if <paramref name="isFinalBlock"/> is <see langword="false"/>, otherwise the output is padded if the input is not a multiple of 3
+        /// It does not return InvalidData since that is not possible for base64url encoding.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus EncodeToUtf8(ReadOnlySpan<byte> bytes, Span<byte> utf8, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true) =>
+            Base64Internal.EncodeToUtf8(EncodingMap, EncodingMapAvx2, EncodingMapSsse3, bytes, utf8, out bytesConsumed, out bytesWritten, isFinalBlock);
+
+        /// <summary>
+        /// Encode the span of binary data (in-place) into UTF-8 encoded text represented as base64url.
+        /// The encoded text output is larger than the binary data contained in the input (the operation inflates the data).
+        /// </summary>
+        /// <param name="buffer">The input span which contains binary data that needs to be encoded.
+        /// It needs to be large enough to fit the result of the operation.</param>
+        /// <param name="dataLength">The amount of binary data contained within the buffer that needs to be encoded
+        /// (and needs to be smaller than the buffer length).</param>
+        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
+        /// <returns>It returns the OperationStatus enum values:
+        /// - Done - on successful processing of the entire buffer
+        /// - DestinationTooSmall - if there is not enough space in the buffer beyond dataLength to fit the result of encoding the input
+        /// It does not return NeedMoreData since this method tramples the data in the buffer and hence can only be called once with all the data in the buffer.
+        /// It does not return InvalidData since that is not possible for base64url encoding.
+        /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static unsafe OperationStatus EncodeToUtf8InPlace(Span<byte> buffer, int dataLength, out int bytesWritten) =>
+            Base64Internal.EncodeToUtf8InPlace(EncodingMap, buffer, dataLength, out bytesWritten);
+
+        /// <summary>
+        /// Returns the maximum length (in bytes) of the result if you were to encode binary data within a byte span of size "length".
+        /// </summary>
+        /// <exception cref="System.ArgumentOutOfRangeException">
+        /// Thrown when the specified <paramref name="length"/> is less than 0 or larger than 1610612733 (since encode inflates the data by 4/3).
+        /// </exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetMaxEncodedToUtf8Length(int length) =>
+            Base64Internal.GetMaxEncodedToUtf8Length(length);
+
+        private static ReadOnlySpan<byte> EncodingMap => new byte[] {
+            65, 66, 67, 68, 69, 70, 71, 72,         //A..H
+            73, 74, 75, 76, 77, 78, 79, 80,         //I..P
+            81, 82, 83, 84, 85, 86, 87, 88,         //Q..X
+            89, 90, 97, 98, 99, 100, 101, 102,      //Y..Z, a..f
+            103, 104, 105, 106, 107, 108, 109, 110, //g..n
+            111, 112, 113, 114, 115, 116, 117, 118, //o..v
+            119, 120, 121, 122, 48, 49, 50, 51,     //w..z, 0..3
+            52, 53, 54, 55, 56, 57, 45, 95          //4..9, -, _
+        };
+
+        private static readonly Vector256<sbyte> EncodingMapAvx2 = Vector256.Create(
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -17, 32, 0, 0,
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -17, 32, 0, 0);
+
+        private static readonly Vector128<sbyte> EncodingMapSsse3 = Vector128.Create(
+            65, 71, -4, -4,
+            -4, -4, -4, -4,
+            -4, -4, -4, -4,
+            -17, 32, 0, 0);
+    }
+
+    // AVX2 version based on https://github.com/aklomp/base64/tree/e516d769a2a432c08404f1981e73b431566057be/lib/arch/avx2
+    // SSSE3 version based on https://github.com/aklomp/base64/tree/e516d769a2a432c08404f1981e73b431566057be/lib/arch/ssse3
+
+    internal static partial class Base64Internal
+    {
+        internal static unsafe OperationStatus EncodeToUtf8(ReadOnlySpan<byte> encodingMapSpan, Vector256<sbyte> encodingMapAvx2, Vector128<sbyte> encodingMapSsse3, ReadOnlySpan<byte> bytes, Span<byte> utf8, out int bytesConsumed, out int bytesWritten, bool isFinalBlock = true)
         {
             if (bytes.IsEmpty)
             {
@@ -68,7 +221,7 @@ namespace System.Buffers.Text
                     byte* end = srcMax - 32;
                     if (Avx2.IsSupported && (end >= src))
                     {
-                        Avx2Encode(ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
+                        Avx2Encode(encodingMapAvx2, ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
 
                         if (src == srcEnd)
                             goto DoneExit;
@@ -77,14 +230,14 @@ namespace System.Buffers.Text
                     end = srcMax - 16;
                     if (Ssse3.IsSupported && (end >= src))
                     {
-                        Ssse3Encode(ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
+                        Ssse3Encode(encodingMapSsse3, ref src, ref dest, end, maxSrcLength, destLength, srcBytes, destBytes);
 
                         if (src == srcEnd)
                             goto DoneExit;
                     }
                 }
 
-                ref byte encodingMap = ref MemoryMarshal.GetReference(EncodingMap);
+                ref byte encodingMap = ref MemoryMarshal.GetReference(encodingMapSpan);
                 uint result = 0;
 
                 srcMax -= 2;
@@ -139,14 +292,8 @@ namespace System.Buffers.Text
             }
         }
 
-        /// <summary>
-        /// Returns the maximum length (in bytes) of the result if you were to encode binary data within a byte span of size "length".
-        /// </summary>
-        /// <exception cref="System.ArgumentOutOfRangeException">
-        /// Thrown when the specified <paramref name="length"/> is less than 0 or larger than 1610612733 (since encode inflates the data by 4/3).
-        /// </exception>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int GetMaxEncodedToUtf8Length(int length)
+        internal static int GetMaxEncodedToUtf8Length(int length)
         {
             if ((uint)length > MaximumEncodeLength)
                 ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.length);
@@ -154,22 +301,7 @@ namespace System.Buffers.Text
             return ((length + 2) / 3) * 4;
         }
 
-        /// <summary>
-        /// Encode the span of binary data (in-place) into UTF-8 encoded text represented as base 64.
-        /// The encoded text output is larger than the binary data contained in the input (the operation inflates the data).
-        /// </summary>
-        /// <param name="buffer">The input span which contains binary data that needs to be encoded.
-        /// It needs to be large enough to fit the result of the operation.</param>
-        /// <param name="dataLength">The amount of binary data contained within the buffer that needs to be encoded
-        /// (and needs to be smaller than the buffer length).</param>
-        /// <param name="bytesWritten">The number of bytes written into the buffer.</param>
-        /// <returns>It returns the OperationStatus enum values:
-        /// - Done - on successful processing of the entire buffer
-        /// - DestinationTooSmall - if there is not enough space in the buffer beyond dataLength to fit the result of encoding the input
-        /// It does not return NeedMoreData since this method tramples the data in the buffer and hence can only be called once with all the data in the buffer.
-        /// It does not return InvalidData since that is not possible for base 64 encoding.
-        /// </returns>
-        public static unsafe OperationStatus EncodeToUtf8InPlace(Span<byte> buffer, int dataLength, out int bytesWritten)
+        internal static unsafe OperationStatus EncodeToUtf8InPlace(ReadOnlySpan<byte> encodingMapSpan, Span<byte> buffer, int dataLength, out int bytesWritten)
         {
             if (buffer.IsEmpty)
             {
@@ -188,7 +320,7 @@ namespace System.Buffers.Text
                 uint destinationIndex = (uint)(encodedLength - 4);
                 uint sourceIndex = (uint)(dataLength - leftover);
                 uint result = 0;
-                ref byte encodingMap = ref MemoryMarshal.GetReference(EncodingMap);
+                ref byte encodingMap = ref MemoryMarshal.GetReference(encodingMapSpan);
 
                 // encode last pack to avoid conditional in the main loop
                 if (leftover != 0)
@@ -218,14 +350,14 @@ namespace System.Buffers.Text
                 bytesWritten = encodedLength;
                 return OperationStatus.Done;
 
-            FalseExit:
+FalseExit:
                 bytesWritten = 0;
                 return OperationStatus.DestinationTooSmall;
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe void Avx2Encode(ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
+        private static unsafe void Avx2Encode(Vector256<sbyte> lut, ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
         {
             // If we have AVX2 support, pick off 24 bytes at a time for as long as we can.
             // But because we read 32 bytes at a time, ensure we have enough room to do a
@@ -249,16 +381,6 @@ namespace System.Buffers.Text
                 4, 3, 5, 4,
                 7, 6, 8, 7,
                 10, 9, 11, 10);
-
-            Vector256<sbyte> lut = Vector256.Create(
-                65, 71, -4, -4,
-                -4, -4, -4, -4,
-                -4, -4, -4, -4,
-                -19, -16, 0, 0,
-                65, 71, -4, -4,
-                -4, -4, -4, -4,
-                -4, -4, -4, -4,
-                -19, -16, 0, 0);
 
             Vector256<sbyte> maskAC = Vector256.Create(0x0fc0fc00).AsSByte();
             Vector256<sbyte> maskBB = Vector256.Create(0x003f03f0).AsSByte();
@@ -395,7 +517,7 @@ namespace System.Buffers.Text
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe void Ssse3Encode(ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
+        private static unsafe void Ssse3Encode(Vector128<sbyte> lut, ref byte* srcBytes, ref byte* destBytes, byte* srcEnd, int sourceLength, int destLength, byte* srcStart, byte* destStart)
         {
             // If we have SSSE3 support, pick off 12 bytes at a time for as long as we can.
             // But because we read 16 bytes at a time, ensure we have enough room to do a
@@ -410,12 +532,6 @@ namespace System.Buffers.Text
                 4, 3, 5, 4,
                 7, 6, 8, 7,
                 10, 9, 11, 10);
-
-            Vector128<sbyte> lut = Vector128.Create(
-                65, 71, -4, -4,
-                -4, -4, -4, -4,
-                -4, -4, -4, -4,
-                -19, -16, 0, 0);
 
             Vector128<sbyte> maskAC = Vector128.Create(0x0fc0fc00).AsSByte();
             Vector128<sbyte> maskBB = Vector128.Create(0x003f03f0).AsSByte();
@@ -573,20 +689,8 @@ namespace System.Buffers.Text
             }
         }
 
-        private const uint EncodingPad = '='; // '=', for padding
+        private const uint EncodingPad = '=';
 
         private const int MaximumEncodeLength = (int.MaxValue / 4) * 3; // 1610612733
-
-        // Pre-computing this table using a custom string(s_characters) and GenerateEncodingMapAndVerify (found in tests)
-        private static ReadOnlySpan<byte> EncodingMap => new byte[] {
-            65, 66, 67, 68, 69, 70, 71, 72,         //A..H
-            73, 74, 75, 76, 77, 78, 79, 80,         //I..P
-            81, 82, 83, 84, 85, 86, 87, 88,         //Q..X
-            89, 90, 97, 98, 99, 100, 101, 102,      //Y..Z, a..f
-            103, 104, 105, 106, 107, 108, 109, 110, //g..n
-            111, 112, 113, 114, 115, 116, 117, 118, //o..v
-            119, 120, 121, 122, 48, 49, 50, 51,     //w..z, 0..3
-            52, 53, 54, 55, 56, 57, 43, 47          //4..9, +, /
-        };
     }
 }
