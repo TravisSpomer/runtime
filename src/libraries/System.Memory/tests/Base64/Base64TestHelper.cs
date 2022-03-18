@@ -121,5 +121,33 @@ namespace System.Buffers.Text.Tests
             byte[] expectedBytes = Convert.FromBase64String(sourceString);
             return expectedBytes.AsSpan().SequenceEqual(decodedBytes.Slice(0, expectedWritten));
         }
+
+        public static bool VerifyEncodedBytesAreEqualExceptAsExpected(Span<byte> base64Bytes, Span<byte> base64UrlBytes)
+        {
+            // Binary data encoded in base64 should be identical to the same data encoded in base64 except for two
+            // characters in the output.
+            if (base64Bytes == null || base64UrlBytes == null || base64Bytes.Length != base64UrlBytes.Length)
+            {
+                return false;
+            }
+            for (int i = 0; i < base64Bytes.Length; i++)
+            {
+                byte b64 = base64Bytes[i];
+                byte b64u = base64UrlBytes[i];
+                switch (b64)
+                {
+                    case (byte)'+':
+                        if (b64u != '-') return false;
+                        break;
+                    case (byte)'/':
+                        if (b64u != '_') return false;
+                        break;
+                    default:
+                        if (b64 != b64u) return false;
+                        break;
+                }
+            }
+            return true;
+        }
     }
 }

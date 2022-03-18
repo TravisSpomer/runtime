@@ -297,5 +297,41 @@ namespace System.Buffers.Text.Tests
             Assert.Equal(OperationStatus.DestinationTooSmall, Base64.EncodeToUtf8InPlace(testBytes, testBytes.Length + 1, out int bytesWritten));
             Assert.Equal(0, bytesWritten);
         }
+
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(7)]
+        [InlineData(1000)]
+        public void Base64UrlEncodesToSameBufferSize(int length)
+        {
+            Assert.Equal(Base64.GetMaxEncodedToUtf8Length(length), Base64Url.GetMaxEncodedToUtf8Length(length));
+        }
+
+        [Fact]
+        public void Base64UrlMatchesBase64ExceptAsExpected()
+        {
+            const int TestDataSize = 100000;
+
+            // The test data is mostly random bytes (reproducible due to fixed seed), but the first few bytes are replaced with
+            // a string that, when encoded, includes both + and / (the two characters that are different in Base64Url).
+            var rnd = new Random(42);
+            byte[] testBytes = new byte[TestDataSize];
+            rnd.NextBytes(testBytes);
+            Encoding.ASCII.GetBytes("Hi?>>> This is a test string").CopyTo(testBytes, 0);
+
+            byte[] base64Encoded = new byte[Base64.GetMaxEncodedToUtf8Length(testBytes.Length)];
+            byte[] base64UrlEncoded = new byte[Base64Url.GetMaxEncodedToUtf8Length(testBytes.Length)];
+            Base64.EncodeToUtf8(testBytes, base64Encoded, out int _, out int _);
+            Base64Url.EncodeToUtf8(testBytes, base64UrlEncoded, out int _, out int _);
+            Assert.True(Base64TestHelper.VerifyEncodedBytesAreEqualExceptAsExpected(base64Encoded, base64UrlEncoded));
+
+            byte[] base64Decoded = new byte[TestDataSize];
+            byte[] base64UrlDecoded = new byte[TestDataSize];
+            Base64.DecodeFromUtf8(base64Encoded, base64Decoded, out int _, out int _);
+            Assert.True(base64Decoded.AsSpan().SequenceEqual(testBytes.AsSpan()));
+            Base64Url.DecodeFromUtf8(base64UrlEncoded, base64UrlDecoded, out int _, out int _);
+            Assert.True(base64Decoded.AsSpan().SequenceEqual(base64UrlDecoded.AsSpan()));
+        }
     }
 }

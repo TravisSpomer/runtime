@@ -637,5 +637,15 @@ namespace System.Buffers.Text.Tests
             }
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(4)]
+        [InlineData(8)]
+        [InlineData(1334)]
+        public void Base64UrlDecodesFromSameBufferSize(int length)
+        {
+            Assert.Equal(Base64.GetMaxDecodedFromUtf8Length(length), Base64Url.GetMaxDecodedFromUtf8Length(length));
+        }
+
     }
 }
